@@ -31,7 +31,6 @@ import android.os.Build.VERSION;
 import android.os.Build.VERSION_CODES;
 import android.support.v4.content.FileProvider;
 import android.util.Log;
-import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -50,14 +49,14 @@ public class BluetoothSite extends BluetoothGattCallback {
       "d1a517f0-2499-46ca-9ccc-809bc1c966fa");
   private static final String WEBPAGE_CHAR_BASE_UUID = "d1a50000-2499-46ca-9ccc-809bc1c966fa";
   private static final int WEBPAGE_CHAR_UUID = 0x17f0;
-  private static final int MAX_PAGE_CHARS = 20;   // Pages limited to 20 * 500 bytes
+  private static final int MAX_PAGE_CHARACTERISTICS = 20;   // Pages limited to 20 500 byte characteristics
   private Activity activity;
   private BluetoothGatt mBluetoothGatt;
   private BluetoothGattCharacteristic characteristic;
   private ProgressDialog progress;
   //private int transferRate = 20;
-  private int totalPageChars = 0;   // # of characteristics for the page we're reading
-  private int pageCharsRead = 0;
+  private int pageCharacteristics = 0;   // # of characteristics for the page we're reading
+  private int characteristicsRead = 0;
   private StringBuilder html;
 
   public BluetoothSite(Activity activity) {
@@ -91,14 +90,11 @@ public class BluetoothSite extends BluetoothGattCallback {
   @Override
   public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic,
       int status) {
-    if ((status == BluetoothGatt.GATT_SUCCESS) && (totalPageChars == 0)) {  // First char holds page char count
-      totalPageChars = characteristic.getIntValue(BluetoothGattCharacteristic.FORMAT_UINT8, 0);
-      if ((totalPageChars > 0) && (totalPageChars < MAX_PAGE_CHARS)) {
-
-        String nextPageCharUUIDString = WEBPAGE_CHAR_BASE_UUID.substring(0,4)+
-                String.format("%04x",WEBPAGE_CHAR_UUID+1+pageCharsRead)+
-                WEBPAGE_CHAR_BASE_UUID.substring(8);
-        UUID nextPageCharUUID = UUID.fromString(nextPageCharUUIDString);
+    if ((status == BluetoothGatt.GATT_SUCCESS) && (pageCharacteristics == 0)) {  // First char holds page char count
+      pageCharacteristics = characteristic.getIntValue(BluetoothGattCharacteristic.FORMAT_UINT8, 0);
+      // make sure the webpage is not empty, and less than the maximum size
+      if ((pageCharacteristics > 0) && (pageCharacteristics < MAX_PAGE_CHARACTERISTICS)) {
+        UUID nextPageCharUUID = getNextUUID();
 
         characteristic = gatt.getService(SERVICE_UUID).getCharacteristic(nextPageCharUUID);
         gatt.readCharacteristic(characteristic);
@@ -108,15 +104,12 @@ public class BluetoothSite extends BluetoothGattCallback {
         progress.dismiss();
       }
     } else if (status == BluetoothGatt.GATT_SUCCESS) {
-        pageCharsRead++;
-        Log.i(TAG, "onCharacteristicRead successful: page char #" + pageCharsRead);
+        characteristicsRead++;
+        Log.i(TAG, "onCharacteristicRead successful: page char #" + characteristicsRead);
         html.append(new String(characteristic.getValue()));
 
-        if (pageCharsRead < totalPageChars) {
-          String nextPageCharUUIDString = WEBPAGE_CHAR_BASE_UUID.substring(0,4)+
-                  String.format("%04x",WEBPAGE_CHAR_UUID+1+pageCharsRead)+
-                  WEBPAGE_CHAR_BASE_UUID.substring(8);
-          UUID nextPageCharUUID = UUID.fromString(nextPageCharUUIDString);
+        if (characteristicsRead < pageCharacteristics) {   // Keep reading
+          UUID nextPageCharUUID = getNextUUID();
 
           characteristic = gatt.getService(SERVICE_UUID).getCharacteristic(nextPageCharUUID);
           gatt.readCharacteristic(characteristic);
@@ -179,6 +172,14 @@ public class BluetoothSite extends BluetoothGattCallback {
     }
     mBluetoothGatt.close();
     mBluetoothGatt = null;
+  }
+
+  // Constructs a Characteristic UUID from the current read position and the base UUID
+  private UUID getNextUUID() {
+      String nextPageCharUUIDString = WEBPAGE_CHAR_BASE_UUID.substring(0,4)+
+             String.format("%04x",WEBPAGE_CHAR_UUID+1+ characteristicsRead)+
+             WEBPAGE_CHAR_BASE_UUID.substring(8);
+      return UUID.fromString(nextPageCharUUIDString);
   }
 
   private void openInChrome(File file) {

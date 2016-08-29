@@ -48,11 +48,16 @@ public class BluetoothSite extends BluetoothGattCallback {
   private static final UUID SERVICE_UUID = UUID.fromString("ae5946d4-e587-4ba8-b6a5-a97cca6affd3");
   private static final UUID CHARACTERISTIC_WEBPAGE_UUID = UUID.fromString(
       "d1a517f0-2499-46ca-9ccc-809bc1c966fa");
+  private static final String WEBPAGE_CHAR_BASE_UUID = "d1a50000-2499-46ca-9ccc-809bc1c966fa";
+  private static final int WEBPAGE_CHAR_UUID = 0x17f0;
+  private static final int MAX_PAGE_CHARS = 20;   // Pages limited to 20 * 500 bytes
   private Activity activity;
   private BluetoothGatt mBluetoothGatt;
   private BluetoothGattCharacteristic characteristic;
   private ProgressDialog progress;
-  private int transferRate = 20;
+  //private int transferRate = 20;
+  private int totalPageChars = 0;   // # of characteristics for the page we're reading
+  private int pageCharsRead = 0;
   private StringBuilder html;
 
   public BluetoothSite(Activity activity) {
@@ -86,31 +91,52 @@ public class BluetoothSite extends BluetoothGattCallback {
   @Override
   public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic,
       int status) {
-    if (status == BluetoothGatt.GATT_SUCCESS
-        && characteristic.getValue().length < transferRate) {
-      Log.i(TAG, "onCharacteristicRead successful: small packet");
-      // Transfer is complete
-      html.append(new String(characteristic.getValue()));
-      progress.dismiss();
-      gatt.close();
-      File websiteDir = new File(activity.getFilesDir(), "Websites");
-      websiteDir.mkdir();
-      File file = new File(websiteDir, "website.html");
-      writeToFile(file);
-      if (file != null) {
-        openInChrome(file);
+    if ((status == BluetoothGatt.GATT_SUCCESS) && (totalPageChars == 0)) {  // First char holds page char count
+      totalPageChars = characteristic.getIntValue(BluetoothGattCharacteristic.FORMAT_UINT8, 0);
+      if ((totalPageChars > 0) && (totalPageChars < MAX_PAGE_CHARS)) {
+
+        String nextPageCharUUIDString = WEBPAGE_CHAR_BASE_UUID.substring(0,4)+
+                String.format("%04x",WEBPAGE_CHAR_UUID+1+pageCharsRead)+
+                WEBPAGE_CHAR_BASE_UUID.substring(8);
+        UUID nextPageCharUUID = UUID.fromString(nextPageCharUUIDString);
+
+        characteristic = gatt.getService(SERVICE_UUID).getCharacteristic(nextPageCharUUID);
+        gatt.readCharacteristic(characteristic);
+      } else {
+        Log.i(TAG, "onCharacteristicRead returned invalid number of page Characteristics");
+        close();
+        progress.dismiss();
       }
     } else if (status == BluetoothGatt.GATT_SUCCESS) {
-      Log.i(TAG, "onCharacteristicRead successful: full packet");
-      // Full packet received, check for more data
-      html.append(new String(characteristic.getValue()));
-      gatt.readCharacteristic(this.characteristic);
+        pageCharsRead++;
+        Log.i(TAG, "onCharacteristicRead successful: page char #" + pageCharsRead);
+        html.append(new String(characteristic.getValue()));
+
+        if (pageCharsRead < totalPageChars) {
+          String nextPageCharUUIDString = WEBPAGE_CHAR_BASE_UUID.substring(0,4)+
+                  String.format("%04x",WEBPAGE_CHAR_UUID+1+pageCharsRead)+
+                  WEBPAGE_CHAR_BASE_UUID.substring(8);
+          UUID nextPageCharUUID = UUID.fromString(nextPageCharUUIDString);
+
+          characteristic = gatt.getService(SERVICE_UUID).getCharacteristic(nextPageCharUUID);
+          gatt.readCharacteristic(characteristic);
+        } else {  // All done, cleanup and show the page
+          progress.dismiss();
+          gatt.close();
+          File websiteDir = new File(activity.getFilesDir(), "Websites");
+          websiteDir.mkdir();
+          File file = new File(websiteDir, "website.html");
+          writeToFile(file);
+          if (file != null) {
+            openInChrome(file);
+          }
+        }
     } else {
       Log.i(TAG, "onCharacteristicRead unsuccessful: " + status);
       close();
       progress.dismiss();
-      Toast.makeText(activity, R.string.ble_download_error_message, Toast.LENGTH_SHORT).show();
     }
+
   }
 
   @Override
@@ -134,7 +160,7 @@ public class BluetoothSite extends BluetoothGattCallback {
   @Override
   public void onMtuChanged(BluetoothGatt gatt, int mtu, int status) {
     Log.i(TAG, "MTU changed to " + mtu);
-    transferRate = mtu - 5;
+    //transferRate = mtu - 5;
     gatt.discoverServices();
   }
 
